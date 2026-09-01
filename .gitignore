@@ -218,9 +218,9 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Thesis data and generated outputs
-data/
-outputs/
-checkpoints/
+/data/
+/outputs/
+/checkpoints/
 
 # Trained models
 *.pt
