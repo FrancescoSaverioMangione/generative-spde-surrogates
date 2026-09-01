@@ -216,3 +216,22 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Thesis data and generated outputs
+data/
+outputs/
+checkpoints/
+
+# Trained models
+*.pt
+*.pth
+
+# Numerical datasets
+*.npz
+*.npy
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
