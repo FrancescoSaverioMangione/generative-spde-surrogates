@@ -1,17 +1,22 @@
+import copy
+
 import numpy as np
 import torch
 
 from torch.utils.data import (
-    TensorDataset,
     DataLoader,
+    TensorDataset,
 )
 
 
-DEFAULT_FM_TRAIN_CONFIG = {
+DEFAULT_TRAIN_CONFIG = {
     "batch_size": 128,
     "epochs": 300,
     "lr": 1e-4,
     "weight_decay": 1e-5,
+    "patience": None,
+    "min_delta": 0.0,
+    "restore_best": True,
 }
 
 
@@ -26,31 +31,36 @@ def train_flow_matching(
     verbose=True,
 ):
     """
-    Train a Conditional Flow Matching model.
+    Train conditional Flow Matching.
 
-    The target velocity is
-
-        v_target = x1 - x0
-
-    along the linear interpolation
+    The interpolation path is
 
         x_tau = (1 - tau) * x0 + tau * x1
 
-    where x0 is Gaussian noise and x1 is a normalized
-    POD coefficient vector.
+    with target velocity
+
+        v_target = x1 - x0
+
+    where:
+        x0 ~ N(0, I)
+        x1 = data sample.
+
+    Supports:
+    - validation monitoring;
+    - early stopping;
+    - best-model restoration.
     """
 
-    used_config = (
-        DEFAULT_FM_TRAIN_CONFIG.copy()
-    )
+    # ========================================================
+    # CONFIGURATION
+    # ========================================================
+
+    settings = DEFAULT_TRAIN_CONFIG.copy()
 
     if config is not None:
-        used_config.update(
-            config
-        )
+        settings.update(config)
 
     if device is None:
-
         device = (
             "cuda"
             if torch.cuda.is_available()
@@ -59,221 +69,251 @@ def train_flow_matching(
 
     model = model.to(device)
 
-    # --------------------------------------------------------
-    # NUMPY -> TORCH
-    # --------------------------------------------------------
+    # ========================================================
+    # DATA
+    # ========================================================
 
-    train_conditions = torch.as_tensor(
-        train_conditions,
+    train_conditions_tensor = torch.tensor(
+        np.asarray(train_conditions),
         dtype=torch.float32,
     )
 
-    train_targets = torch.as_tensor(
-        train_targets,
+    train_targets_tensor = torch.tensor(
+        np.asarray(train_targets),
         dtype=torch.float32,
     )
 
-    val_conditions = torch.as_tensor(
-        val_conditions,
+    val_conditions_tensor = torch.tensor(
+        np.asarray(val_conditions),
         dtype=torch.float32,
+        device=device,
     )
 
-    val_targets = torch.as_tensor(
-        val_targets,
+    val_targets_tensor = torch.tensor(
+        np.asarray(val_targets),
         dtype=torch.float32,
+        device=device,
     )
-
-    # --------------------------------------------------------
-    # DATASETS
-    # --------------------------------------------------------
 
     train_dataset = TensorDataset(
-        train_conditions,
-        train_targets,
-    )
-
-    val_dataset = TensorDataset(
-        val_conditions,
-        val_targets,
+        train_conditions_tensor,
+        train_targets_tensor,
     )
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=min(
-            used_config["batch_size"],
-            len(train_dataset),
+        batch_size=int(
+            settings["batch_size"]
         ),
         shuffle=True,
-        drop_last=False,
     )
 
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=min(
-            used_config["batch_size"],
-            len(val_dataset),
-        ),
-        shuffle=False,
-        drop_last=False,
-    )
-
-    # --------------------------------------------------------
+    # ========================================================
     # OPTIMIZER
-    # --------------------------------------------------------
+    # ========================================================
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=used_config["lr"],
-        weight_decay=used_config[
-            "weight_decay"
-        ],
+        lr=float(
+            settings["lr"]
+        ),
+        weight_decay=float(
+            settings["weight_decay"]
+        ),
     )
+
+    # ========================================================
+    # FIXED VALIDATION RANDOMNESS
+    # ========================================================
+    #
+    # Flow Matching validation would otherwise use a new
+    # x0 and a new tau at every epoch.
+    #
+    # Fixing them once makes the validation loss comparable
+    # across epochs and therefore more suitable for
+    # early stopping / best-model selection.
+    # ========================================================
+
+    val_x0 = torch.randn_like(
+        val_targets_tensor
+    )
+
+    val_tau = torch.rand(
+        (
+            val_targets_tensor.shape[0],
+            1,
+        ),
+        dtype=torch.float32,
+        device=device,
+    )
+
+    val_x_tau = (
+        (1.0 - val_tau)
+        * val_x0
+        +
+        val_tau
+        * val_targets_tensor
+    )
+
+    val_target_velocity = (
+        val_targets_tensor
+        - val_x0
+    )
+
+    # ========================================================
+    # EARLY STOPPING STATE
+    # ========================================================
+
+    patience = settings.get(
+        "patience"
+    )
+
+    min_delta = float(
+        settings.get(
+            "min_delta",
+            0.0,
+        )
+    )
+
+    restore_best = bool(
+        settings.get(
+            "restore_best",
+            True,
+        )
+    )
+
+    best_val_loss = float("inf")
+    best_epoch = None
+    best_state = None
+
+    epochs_without_improvement = 0
 
     train_history = []
     val_history = []
 
-    # --------------------------------------------------------
-    # TRAINING
-    # --------------------------------------------------------
+    n_epochs = int(
+        settings["epochs"]
+    )
 
-    for epoch in range(
-        used_config["epochs"]
-    ):
+    print_every = max(
+        1,
+        n_epochs // 10,
+    )
+
+    # ========================================================
+    # TRAINING LOOP
+    # ========================================================
+
+    for epoch in range(n_epochs):
 
         model.train()
 
-        batch_losses = []
+        running_loss = 0.0
+        n_seen = 0
 
         for (
-            cond_batch,
+            condition_batch,
             target_batch,
         ) in train_loader:
 
-            cond_batch = cond_batch.to(
-                device
+            condition_batch = (
+                condition_batch.to(device)
             )
 
-            # x1 = data sample
-            x1 = target_batch.to(
-                device
+            target_batch = (
+                target_batch.to(device)
             )
 
-            # x0 = Gaussian source
-            x0 = torch.randn_like(
-                x1
-            )
+            # x1 is the data sample.
+            x1 = target_batch
 
-            # Artificial Flow Matching time
+            # x0 is sampled from the base Gaussian.
+            x0 = torch.randn_like(x1)
+
+            # Random interpolation time.
             tau = torch.rand(
-                x1.shape[0],
-                1,
+                (
+                    x1.shape[0],
+                    1,
+                ),
+                dtype=x1.dtype,
                 device=device,
             )
 
-            # Linear interpolation
+            # Linear interpolation path.
             x_tau = (
-                (1.0 - tau) * x0
-                + tau * x1
+                (1.0 - tau)
+                * x0
+                +
+                tau
+                * x1
             )
 
-            # Exact velocity along this path
-            v_target = (
-                x1 - x0
+            # Exact velocity along the linear path.
+            target_velocity = (
+                x1
+                - x0
             )
 
-            # Predicted velocity
-            v_pred = model(
+            optimizer.zero_grad()
+
+            predicted_velocity = model(
                 x_tau,
-                cond_batch,
+                condition_batch,
                 tau,
             )
 
-            # Flow Matching loss
-            loss = (
-                v_target
-                - v_pred
-            ).pow(2).mean()
-
-            optimizer.zero_grad()
+            loss = torch.mean(
+                (
+                    predicted_velocity
+                    - target_velocity
+                )
+                ** 2
+            )
 
             loss.backward()
 
             optimizer.step()
 
-            batch_losses.append(
-                loss.item()
+            batch_size = (
+                condition_batch.shape[0]
             )
 
-        # ----------------------------------------------------
+            running_loss += (
+                float(loss.item())
+                * batch_size
+            )
+
+            n_seen += batch_size
+
+        train_loss = (
+            running_loss
+            / n_seen
+        )
+
+        # ====================================================
         # VALIDATION
-        # ----------------------------------------------------
+        # ====================================================
 
         model.eval()
 
-        val_losses = []
-
         with torch.no_grad():
 
-            for (
-                cond_batch,
-                target_batch,
-            ) in val_loader:
+            val_predicted_velocity = model(
+                val_x_tau,
+                val_conditions_tensor,
+                val_tau,
+            )
 
-                cond_batch = (
-                    cond_batch.to(
-                        device
+            val_loss = float(
+                torch.mean(
+                    (
+                        val_predicted_velocity
+                        - val_target_velocity
                     )
-                )
-
-                x1 = target_batch.to(
-                    device
-                )
-
-                x0 = torch.randn_like(
-                    x1
-                )
-
-                tau = torch.rand(
-                    x1.shape[0],
-                    1,
-                    device=device,
-                )
-
-                x_tau = (
-                    (1.0 - tau) * x0
-                    + tau * x1
-                )
-
-                v_target = (
-                    x1 - x0
-                )
-
-                v_pred = model(
-                    x_tau,
-                    cond_batch,
-                    tau,
-                )
-
-                val_loss = (
-                    v_target
-                    - v_pred
-                ).pow(2).mean()
-
-                val_losses.append(
-                    val_loss.item()
-                )
-
-        train_loss = float(
-            np.mean(
-                batch_losses
+                    ** 2
+                ).item()
             )
-        )
-
-        val_loss = float(
-            np.mean(
-                val_losses
-            )
-        )
 
         train_history.append(
             train_loss
@@ -283,29 +323,106 @@ def train_flow_matching(
             val_loss
         )
 
-        print_every = max(
-            1,
-            used_config["epochs"] // 10,
+        # ====================================================
+        # BEST MODEL
+        # ====================================================
+
+        improved = (
+            val_loss
+            <
+            best_val_loss
+            - min_delta
         )
 
-        if (
-            verbose
-            and (
-                epoch + 1
-            ) % print_every == 0
+        if improved:
+
+            best_val_loss = val_loss
+            best_epoch = epoch + 1
+
+            best_state = copy.deepcopy(
+                model.state_dict()
+            )
+
+            epochs_without_improvement = 0
+
+        else:
+
+            epochs_without_improvement += 1
+
+        # ====================================================
+        # PRINT
+        # ====================================================
+
+        if verbose and (
+            epoch == 0
+            or (epoch + 1) % print_every == 0
+            or epoch + 1 == n_epochs
         ):
 
             print(
-                f"epoch "
+                f"Epoch "
                 f"{epoch + 1:4d}/"
-                f"{used_config['epochs']} - "
-                f"train FM loss="
-                f"{train_loss:.4e} - "
-                f"val FM loss="
-                f"{val_loss:.4e}"
+                f"{n_epochs} | "
+                f"train="
+                f"{train_loss:.6e} | "
+                f"val="
+                f"{val_loss:.6e} | "
+                f"best="
+                f"{best_val_loss:.6e}"
             )
 
+        # ====================================================
+        # EARLY STOPPING
+        # ====================================================
+
+        if (
+            patience is not None
+            and epochs_without_improvement
+            >= int(patience)
+        ):
+
+            if verbose:
+                print(
+                    "Early stopping at epoch "
+                    f"{epoch + 1}. "
+                    "Best epoch: "
+                    f"{best_epoch}."
+                )
+
+            break
+
+    # ========================================================
+    # RESTORE BEST MODEL
+    # ========================================================
+
+    if (
+        restore_best
+        and best_state is not None
+    ):
+
+        model.load_state_dict(
+            best_state
+        )
+
     model.eval()
+
+    # ========================================================
+    # TRAINING INFORMATION
+    # ========================================================
+
+    used_config = settings.copy()
+
+    used_config["best_epoch"] = (
+        best_epoch
+    )
+
+    used_config["best_val_loss"] = (
+        float(best_val_loss)
+    )
+
+    used_config["epochs_ran"] = (
+        len(train_history)
+    )
 
     return (
         model,

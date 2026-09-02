@@ -40,7 +40,7 @@ realnvp:
     epochs: 300
     lr: 0.0001
     weight_decay: 0.00001
-    patience: 30
+    patience: 20
     min_delta: 0.0
     restore_best: true
 
@@ -56,6 +56,9 @@ flow_matching:
     epochs: 300
     lr: 0.0001
     weight_decay: 0.00001
+    patience: 30
+    min_delta: 0.0
+    restore_best: true
 
   sampling:
     n_steps: 100
