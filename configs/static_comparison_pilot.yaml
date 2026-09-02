@@ -1,23 +1,26 @@
 experiment:
-  name: static_comparison_smoke
+  name: static_comparison_pilot
   seed: 123
-  output_dir: outputs/static_comparison_smoke
+  output_dir: outputs/static_comparison_pilot
 
 problem:
   module: spde_surrogates.problems.randomized_advection_diffusion
 
 data:
-  path: data/static_comparison_smoke.npz
-  n_mu: 4
-  n_realizations: 2
+  path: data/static_comparison_pilot_20x10.npz
+
+  n_mu: 20
+  n_realizations: 10
+
   nimp: 3
+
   dt: 0.05
-  steps: 4
+  steps: 100
 
 split:
-  train_fraction: 0.5
-  val_fraction: 0.25
-  test_fraction: 0.25
+  train_fraction: 0.70
+  val_fraction: 0.15
+  test_fraction: 0.15
   seed: 1
 
 pod:
@@ -28,33 +31,34 @@ pod:
 
 realnvp:
   model:
-    n_layers: 4
-    hidden_size: 64
-    hidden_depth: 1
+    n_layers: 8
+    hidden_size: 128
+    hidden_depth: 2
 
   training:
-    batch_size: 32
-    epochs: 10
+    batch_size: 128
+    epochs: 300
     lr: 0.001
     weight_decay: 0.00001
 
 flow_matching:
   model:
     hidden_dims:
-      - 64
-      - 64
+      - 256
+      - 256
+      - 256
 
   training:
-    batch_size: 32
-    epochs: 10
+    batch_size: 128
+    epochs: 300
     lr: 0.0001
     weight_decay: 0.00001
 
   sampling:
-    n_steps: 20
+    n_steps: 100
 
 evaluation:
-  n_generated: 10
+  n_generated: 100
   temporal_coupling: shared_noise
 
 benchmark:
@@ -62,6 +66,7 @@ benchmark:
     - 1
     - 10
     - 50
+    - 100
 
-  n_repeats: 3
-  n_warmup: 1
+  n_repeats: 5
+  n_warmup: 2
