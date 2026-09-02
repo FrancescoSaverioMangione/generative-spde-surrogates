@@ -1,6 +1,10 @@
 experiment:
   name: static_comparison_smoke
   seed: 123
+  output_dir: outputs/static_comparison_smoke
+
+problem:
+  module: spde_surrogates.problems.randomized_advection_diffusion
 
 data:
   path: data/static_comparison_smoke.npz
