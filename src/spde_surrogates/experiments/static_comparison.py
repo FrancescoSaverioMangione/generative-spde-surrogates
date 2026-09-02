@@ -257,33 +257,50 @@ def run_static_comparison(
         ],
     )
 
-    if verbose:
+  if verbose:
 
-        print(
-            "Selected POD modes:",
-            prepared["pod"].n_modes_,
-        )
+    print(
+        "Selected POD modes:",
+        prepared["pod"].n_modes_,
+    )
 
-        print(
-            "Training static samples:",
-            prepared[
-                "X_train_normalized"
-            ].shape[0],
-        )
+    n_times = len(times)
 
-        print(
-            "Validation static samples:",
-            prepared[
-                "X_val_normalized"
-            ].shape[0],
+    n_train_static = (
+        len(
+            prepared["split"]["train_indices"]
         )
+        * n_times
+    )
 
-        print(
-            "Test static samples:",
-            prepared[
-                "X_test_normalized"
-            ].shape[0],
+    n_val_static = (
+        len(
+            prepared["split"]["val_indices"]
         )
+        * n_times
+    )
+
+    n_test_static = (
+        len(
+            prepared["split"]["test_indices"]
+        )
+        * n_times
+    )
+
+    print(
+        "Training static samples:",
+        n_train_static,
+    )
+
+    print(
+        "Validation static samples:",
+        n_val_static,
+    )
+
+    print(
+        "Test static samples:",
+        n_test_static,
+    )
 
     # ========================================================
     # 4. REALNVP
