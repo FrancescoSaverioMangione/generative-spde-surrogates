@@ -506,3 +506,47 @@ def sample_mu(
         high=high,
         size=(3,),
     )
+
+# ============================================================
+# QUALITATIVE VISUALIZATION
+# ============================================================
+
+def animate_trajectory_comparison(
+    trajectories,
+    figsize=(15, 4),
+    cmap="turbo",
+    colorbar=True,
+):
+    """
+    Animate several trajectories of the randomized
+    advection-diffusion problem side by side.
+
+    Parameters
+    ----------
+    trajectories
+        Iterable containing trajectories with shape:
+            (Nt, Nh)
+
+        Example:
+            (
+                real_trajectory,
+                nf_trajectory,
+                fm_trajectory,
+            )
+
+    Returns
+    -------
+    Animation produced by dlroms.fe.animate.
+    """
+
+    trajectories = tuple(
+        trajectories
+    )
+
+    return fe.animate(
+        trajectories,
+        Vh,
+        figsize=figsize,
+        cmap=cmap,
+        colorbar=colorbar,
+    )
