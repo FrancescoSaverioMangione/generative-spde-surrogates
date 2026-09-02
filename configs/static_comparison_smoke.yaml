@@ -1,0 +1,67 @@
+experiment:
+  name: static_comparison_smoke
+  seed: 123
+
+data:
+  path: data/static_comparison_smoke.npz
+
+  # Small values only for the first real-physics smoke test.
+  # These are NOT the final thesis experiment settings.
+  n_mu: 4
+  n_realizations: 2
+  nimp: 3
+
+  dt: 0.05
+  steps: 4
+
+split:
+  train_fraction: 0.5
+  val_fraction: 0.25
+  test_fraction: 0.25
+  seed: 1
+
+pod:
+  target_error: 0.01
+  max_modes: 100
+  selection: trajectory_error
+  energy_threshold: 0.999
+
+realnvp:
+  model:
+    n_layers: 4
+    hidden_size: 64
+    hidden_depth: 1
+
+  training:
+    batch_size: 32
+    epochs: 10
+    lr: 0.001
+    weight_decay: 0.00001
+
+flow_matching:
+  model:
+    hidden_dims:
+      - 64
+      - 64
+
+  training:
+    batch_size: 32
+    epochs: 10
+    lr: 0.0001
+    weight_decay: 0.00001
+
+  sampling:
+    n_steps: 20
+
+evaluation:
+  n_generated: 10
+  temporal_coupling: shared_noise
+
+benchmark:
+  sample_sizes:
+    - 1
+    - 10
+    - 50
+
+  n_repeats: 3
+  n_warmup: 1
