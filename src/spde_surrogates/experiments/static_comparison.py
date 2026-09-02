@@ -2,6 +2,7 @@ from importlib import import_module
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from spde_surrogates.data.dataset import (
     get_fom_dataset,
@@ -35,17 +36,24 @@ from spde_surrogates.persistence.checkpoint import (
 
 def _load_problem(config):
     """
-    Import the physical problem specified in the
-    experiment configuration.
+    Import the physical problem specified in the YAML configuration.
     """
 
-    module_name = config[
-        "problem"
-    ]["module"]
+    module_name = config["problem"]["module"]
 
-    return import_module(
-        module_name
-    )
+    return import_module(module_name)
+
+
+def _set_random_seed(seed):
+    """
+    Set NumPy and PyTorch random seeds.
+    """
+
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def run_static_comparison(
@@ -58,16 +66,15 @@ def run_static_comparison(
 
     Pipeline
     --------
-    1. Load/generate FOM dataset.
-    2. Split by conditioning parameter mu.
-    3. Fit POD using training trajectories only.
-    4. Normalize conditions and POD coefficients.
-    5. Train conditional RealNVP.
-    6. Train conditional Flow Matching.
-    7. Build common generative surrogates.
-    8. Evaluate both methods on the same test data.
-    9. Benchmark generation speed.
-    10. Save complete checkpoints.
+    1. Load the physical problem.
+    2. Load or generate the FOM dataset.
+    3. Split data, fit POD and normalize.
+    4. Train RealNVP.
+    5. Train Flow Matching.
+    6. Evaluate RealNVP.
+    7. Evaluate Flow Matching.
+    8. Benchmark generation speed.
+    9. Save complete checkpoints.
 
     Parameters
     ----------
@@ -83,34 +90,23 @@ def run_static_comparison(
     Returns
     -------
     dict
-        All important objects and results generated
-        during the experiment.
+        Important experiment objects and results.
     """
 
     # ========================================================
     # EXPERIMENT SETTINGS
     # ========================================================
 
-    experiment_config = config[
-        "experiment"
-    ]
+    experiment_config = config["experiment"]
+    data_config = config["data"]
 
-    data_config = config[
-        "data"
-    ]
+    experiment_name = experiment_config["name"]
+    seed = int(experiment_config["seed"])
 
-    experiment_name = (
-        experiment_config["name"]
-    )
-
-    seed = int(
-        experiment_config["seed"]
-    )
+    _set_random_seed(seed)
 
     output_dir = Path(
-        experiment_config[
-            "output_dir"
-        ]
+        experiment_config["output_dir"]
     )
 
     checkpoint_dir = (
@@ -128,7 +124,6 @@ def run_static_comparison(
         exist_ok=True,
     )
 
-    # Dataset directory may not exist yet.
     data_path = Path(
         data_config["path"]
     )
@@ -139,35 +134,22 @@ def run_static_comparison(
     )
 
     if verbose:
-
-        print(
-            "=" * 70
-        )
-
-        print(
-            f"Experiment: {experiment_name}"
-        )
-
-        print(
-            "=" * 70
-        )
+        print("=" * 70)
+        print(f"Experiment: {experiment_name}")
+        print("=" * 70)
 
     # ========================================================
     # 1. PHYSICAL PROBLEM
     # ========================================================
 
     if verbose:
-
         print(
             "\n[1/9] Loading physical problem..."
         )
 
-    problem = _load_problem(
-        config
-    )
+    problem = _load_problem(config)
 
     if verbose:
-
         print(
             "Problem module:",
             config["problem"]["module"],
@@ -178,7 +160,6 @@ def run_static_comparison(
     # ========================================================
 
     if verbose:
-
         print(
             "\n[2/9] Loading or generating FOM dataset..."
         )
@@ -196,9 +177,7 @@ def run_static_comparison(
             data_config["n_mu"]
         ),
         n_realizations=int(
-            data_config[
-                "n_realizations"
-            ]
+            data_config["n_realizations"]
         ),
         nimp=int(
             data_config["nimp"]
@@ -213,7 +192,6 @@ def run_static_comparison(
     )
 
     if verbose:
-
         print(
             "mu_bank shape:",
             mu_bank.shape,
@@ -239,7 +217,6 @@ def run_static_comparison(
     # ========================================================
 
     if verbose:
-
         print(
             "\n[3/9] Preparing common POD representation..."
         )
@@ -249,19 +226,8 @@ def run_static_comparison(
         conds=mus,
         times=times,
         group_ids=group_ids,
-        split_config=config[
-            "split"
-        ],
-        pod_config=config[
-            "pod"
-        ],
-    )
-
-  if verbose:
-
-    print(
-        "Selected POD modes:",
-        prepared["pod"].n_modes_,
+        split_config=config["split"],
+        pod_config=config["pod"],
     )
 
     n_times = len(times)
@@ -287,27 +253,32 @@ def run_static_comparison(
         * n_times
     )
 
-    print(
-        "Training static samples:",
-        n_train_static,
-    )
+    if verbose:
+        print(
+            "Selected POD modes:",
+            prepared["pod"].n_modes_,
+        )
 
-    print(
-        "Validation static samples:",
-        n_val_static,
-    )
+        print(
+            "Training static samples:",
+            n_train_static,
+        )
 
-    print(
-        "Test static samples:",
-        n_test_static,
-    )
+        print(
+            "Validation static samples:",
+            n_val_static,
+        )
+
+        print(
+            "Test static samples:",
+            n_test_static,
+        )
 
     # ========================================================
     # 4. REALNVP
     # ========================================================
 
     if verbose:
-
         print(
             "\n[4/9] Training RealNVP..."
         )
@@ -324,19 +295,17 @@ def run_static_comparison(
         verbose=verbose,
     )
 
-    nf_surrogate = (
-        StaticPODGenerativeSurrogate(
-            model=nf_result["model"],
-            pod=prepared["pod"],
-            condition_normalizer=prepared[
-                "condition_normalizer"
-            ],
-            coefficient_normalizer=prepared[
-                "coefficient_normalizer"
-            ],
-            sampling_config={},
-            device=device,
-        )
+    nf_surrogate = StaticPODGenerativeSurrogate(
+        model=nf_result["model"],
+        pod=prepared["pod"],
+        condition_normalizer=prepared[
+            "condition_normalizer"
+        ],
+        coefficient_normalizer=prepared[
+            "coefficient_normalizer"
+        ],
+        sampling_config={},
+        device=device,
     )
 
     # ========================================================
@@ -344,65 +313,57 @@ def run_static_comparison(
     # ========================================================
 
     if verbose:
-
         print(
             "\n[5/9] Training Flow Matching..."
         )
 
-    fm_result = (
-        train_static_flow_matching(
-            prepared_data=prepared,
-            model_config=config[
-                "flow_matching"
-            ]["model"],
-            train_config=config[
-                "flow_matching"
-            ]["training"],
-            sampling_config=config[
-                "flow_matching"
-            ]["sampling"],
-            device=device,
-            verbose=verbose,
-        )
+    fm_result = train_static_flow_matching(
+        prepared_data=prepared,
+        model_config=config[
+            "flow_matching"
+        ]["model"],
+        train_config=config[
+            "flow_matching"
+        ]["training"],
+        sampling_config=config[
+            "flow_matching"
+        ]["sampling"],
+        device=device,
+        verbose=verbose,
     )
 
-    fm_surrogate = (
-        StaticPODGenerativeSurrogate(
-            model=fm_result["model"],
-            pod=prepared["pod"],
-            condition_normalizer=prepared[
-                "condition_normalizer"
-            ],
-            coefficient_normalizer=prepared[
-                "coefficient_normalizer"
-            ],
-            sampling_config=config[
-                "flow_matching"
-            ]["sampling"],
-            device=device,
-        )
+    fm_surrogate = StaticPODGenerativeSurrogate(
+        model=fm_result["model"],
+        pod=prepared["pod"],
+        condition_normalizer=prepared[
+            "condition_normalizer"
+        ],
+        coefficient_normalizer=prepared[
+            "coefficient_normalizer"
+        ],
+        sampling_config=config[
+            "flow_matching"
+        ]["sampling"],
+        device=device,
     )
 
     # ========================================================
-    # 6. TEST GROUP IDS
+    # TEST GROUP IDS
     # ========================================================
 
     test_indices = prepared[
         "split"
     ]["test_indices"]
 
-    test_group_ids = (
-        group_ids[
-            test_indices
-        ]
-    )
+    test_group_ids = group_ids[
+        test_indices
+    ]
 
     # ========================================================
-    # 7. COMMON EVALUATION
+    # 6. REALNVP EVALUATION
     # ========================================================
 
     if verbose:
-
         print(
             "\n[6/9] Evaluating RealNVP..."
         )
@@ -433,8 +394,11 @@ def run_static_comparison(
         verbose=verbose,
     )
 
-    if verbose:
+    # ========================================================
+    # 7. FLOW MATCHING EVALUATION
+    # ========================================================
 
+    if verbose:
         print(
             "\n[7/9] Evaluating Flow Matching..."
         )
@@ -466,7 +430,6 @@ def run_static_comparison(
     # ========================================================
 
     if verbose:
-
         print(
             "\n[8/9] Benchmarking generation..."
         )
@@ -475,50 +438,41 @@ def run_static_comparison(
         "benchmark"
     ]
 
-    # Use the first test conditioning parameter
-    # for the common timing benchmark.
     benchmark_mu = prepared[
         "mus_test"
     ][0]
 
-    benchmark_results = (
-        benchmark_surrogates(
-            surrogates={
-                "NF":
-                    nf_surrogate,
-
-                "FM":
-                    fm_surrogate,
-            },
-            mu=benchmark_mu,
-            times=times,
-            sample_sizes=
-                benchmark_config[
-                    "sample_sizes"
-                ],
-            n_repeats=int(
-                benchmark_config[
-                    "n_repeats"
-                ]
-            ),
-            n_warmup=int(
-                benchmark_config[
-                    "n_warmup"
-                ]
-            ),
-            temporal_coupling=
-                evaluation_config[
-                    "temporal_coupling"
-                ],
-        )
+    benchmark_results = benchmark_surrogates(
+        surrogates={
+            "NF": nf_surrogate,
+            "FM": fm_surrogate,
+        },
+        mu=benchmark_mu,
+        times=times,
+        sample_sizes=benchmark_config[
+            "sample_sizes"
+        ],
+        n_repeats=int(
+            benchmark_config[
+                "n_repeats"
+            ]
+        ),
+        n_warmup=int(
+            benchmark_config[
+                "n_warmup"
+            ]
+        ),
+        temporal_coupling=
+            evaluation_config[
+                "temporal_coupling"
+            ],
     )
 
     # ========================================================
-    # 9. CHECKPOINTS
+    # 9. SAVE CHECKPOINTS
     # ========================================================
 
     if verbose:
-
         print(
             "\n[9/9] Saving checkpoints..."
         )
@@ -541,9 +495,7 @@ def run_static_comparison(
             seed,
 
         "problem_module":
-            config[
-                "problem"
-            ]["module"],
+            config["problem"]["module"],
 
         "n_mu":
             int(
@@ -602,7 +554,6 @@ def run_static_comparison(
     )
 
     if verbose:
-
         print(
             "\nCheckpoints:"
         )
@@ -621,12 +572,10 @@ def run_static_comparison(
             "\nExperiment completed."
         )
 
-        print(
-            "=" * 70
-        )
+        print("=" * 70)
 
     # ========================================================
-    # RETURN EVERYTHING USEFUL
+    # RETURN RESULTS
     # ========================================================
 
     return {

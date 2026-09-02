@@ -1,9 +1,11 @@
+import copy
+
 import numpy as np
 import torch
 
 from torch.utils.data import (
-    TensorDataset,
     DataLoader,
+    TensorDataset,
 )
 
 
@@ -12,75 +14,36 @@ DEFAULT_TRAIN_CONFIG = {
     "epochs": 300,
     "lr": 1e-3,
     "weight_decay": 1e-5,
+    "patience": None,
+    "min_delta": 0.0,
+    "restore_best": True,
 }
 
 
 def train_realnvp(
     model,
-    train_conditions,
-    train_targets,
-    val_conditions,
-    val_targets,
-    config=None,
+    X_train,
+    Y_train,
+    X_val,
+    Y_val,
+    train_config=None,
     device=None,
     verbose=True,
 ):
     """
-    Train a Conditional RealNVP by minimizing the
-    Negative Log-Likelihood.
+    Train a conditional RealNVP using negative
+    log-likelihood.
 
-    Parameters
-    ----------
-    model
-        Conditional RealNVP model.
-
-    train_conditions
-        Training conditions, shape:
-        (n_train_samples, dim_cond)
-
-    train_targets
-        Normalized training POD coefficients, shape:
-        (n_train_samples, dim_y)
-
-    val_conditions
-        Validation conditions.
-
-    val_targets
-        Validation POD coefficients.
-
-    config
-        Dictionary containing training hyperparameters.
-
-    device
-        "cuda" or "cpu".
-        If None, CUDA is automatically selected when available.
-
-    verbose
-        Print training progress.
-
-    Returns
-    -------
-    model
-        Trained model.
-
-    train_history
-        Mean training NLL for every epoch.
-
-    val_history
-        Mean validation NLL for every epoch.
-
-    used_config
-        Training configuration actually used.
+    Supports optional early stopping based on
+    validation loss.
     """
 
-    # --------------------------------------------------------
-    # CONFIGURATION
-    # --------------------------------------------------------
+    config = DEFAULT_TRAIN_CONFIG.copy()
 
-    used_config = DEFAULT_TRAIN_CONFIG.copy()
-
-    if config is not None:
-        used_config.update(config)
+    if train_config is not None:
+        config.update(
+            train_config
+        )
 
     if device is None:
         device = (
@@ -89,198 +52,288 @@ def train_realnvp(
             else "cpu"
         )
 
-    model = model.to(device)
+    model = model.to(
+        device
+    )
 
-    # --------------------------------------------------------
-    # CONVERT NUMPY ARRAYS TO TORCH TENSORS
-    # --------------------------------------------------------
+    # ========================================================
+    # DATA
+    # ========================================================
 
-    train_conditions = torch.as_tensor(
-        train_conditions,
+    X_train_tensor = torch.tensor(
+        np.asarray(X_train),
         dtype=torch.float32,
     )
 
-    train_targets = torch.as_tensor(
-        train_targets,
+    Y_train_tensor = torch.tensor(
+        np.asarray(Y_train),
         dtype=torch.float32,
     )
 
-    val_conditions = torch.as_tensor(
-        val_conditions,
+    X_val_tensor = torch.tensor(
+        np.asarray(X_val),
         dtype=torch.float32,
+        device=device,
     )
 
-    val_targets = torch.as_tensor(
-        val_targets,
+    Y_val_tensor = torch.tensor(
+        np.asarray(Y_val),
         dtype=torch.float32,
+        device=device,
     )
-
-    # --------------------------------------------------------
-    # DATASETS
-    # --------------------------------------------------------
 
     train_dataset = TensorDataset(
-        train_conditions,
-        train_targets,
+        X_train_tensor,
+        Y_train_tensor,
     )
-
-    val_dataset = TensorDataset(
-        val_conditions,
-        val_targets,
-    )
-
-    # --------------------------------------------------------
-    # DATALOADERS
-    # --------------------------------------------------------
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=min(
-            used_config["batch_size"],
-            len(train_dataset),
+        batch_size=int(
+            config["batch_size"]
         ),
         shuffle=True,
-        drop_last=False,
     )
 
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=min(
-            used_config["batch_size"],
-            len(val_dataset),
-        ),
-        shuffle=False,
-        drop_last=False,
-    )
-
-    # --------------------------------------------------------
+    # ========================================================
     # OPTIMIZER
-    # --------------------------------------------------------
+    # ========================================================
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=used_config["lr"],
-        weight_decay=used_config[
-            "weight_decay"
-        ],
+        lr=float(
+            config["lr"]
+        ),
+        weight_decay=float(
+            config["weight_decay"]
+        ),
     )
+
+    # ========================================================
+    # EARLY STOPPING STATE
+    # ========================================================
+
+    patience = config.get(
+        "patience"
+    )
+
+    min_delta = float(
+        config.get(
+            "min_delta",
+            0.0,
+        )
+    )
+
+    restore_best = bool(
+        config.get(
+            "restore_best",
+            True,
+        )
+    )
+
+    best_val_loss = float(
+        "inf"
+    )
+
+    best_epoch = None
+    best_state = None
+    epochs_without_improvement = 0
 
     train_history = []
     val_history = []
 
-    # --------------------------------------------------------
+    # ========================================================
     # TRAINING LOOP
-    # --------------------------------------------------------
+    # ========================================================
+
+    n_epochs = int(
+        config["epochs"]
+    )
+
+    print_every = max(
+        1,
+        n_epochs // 10,
+    )
 
     for epoch in range(
-        used_config["epochs"]
+        n_epochs
     ):
 
         model.train()
 
-        batch_losses = []
+        running_loss = 0.0
+        n_seen = 0
 
-        for (
-            cond_batch,
-            target_batch,
-        ) in train_loader:
+        for X_batch, Y_batch in train_loader:
 
-            cond_batch = cond_batch.to(
+            X_batch = X_batch.to(
                 device
             )
 
-            target_batch = target_batch.to(
+            Y_batch = Y_batch.to(
                 device
             )
-
-            # Negative Log-Likelihood
-            loss = -model.log_prob(
-                target_batch,
-                cond_batch,
-            ).mean()
 
             optimizer.zero_grad()
+
+            loss = -model.log_prob(
+                Y_batch,
+                X_batch,
+            ).mean()
 
             loss.backward()
 
             optimizer.step()
 
-            batch_losses.append(
-                loss.item()
+            batch_size = (
+                X_batch.shape[0]
             )
 
-        # ----------------------------------------------------
+            running_loss += (
+                float(
+                    loss.item()
+                )
+                * batch_size
+            )
+
+            n_seen += batch_size
+
+        train_loss = (
+            running_loss
+            / n_seen
+        )
+
+        # ====================================================
         # VALIDATION
-        # ----------------------------------------------------
+        # ====================================================
 
         model.eval()
 
-        val_losses = []
-
         with torch.no_grad():
 
-            for (
-                cond_batch,
-                target_batch,
-            ) in val_loader:
-
-                cond_batch = cond_batch.to(
-                    device
-                )
-
-                target_batch = target_batch.to(
-                    device
-                )
-
-                val_loss = -model.log_prob(
-                    target_batch,
-                    cond_batch,
-                ).mean()
-
-                val_losses.append(
-                    val_loss.item()
-                )
-
-        train_nll = float(
-            np.mean(batch_losses)
-        )
-
-        val_nll = float(
-            np.mean(val_losses)
-        )
+            val_loss = float(
+                (
+                    -model.log_prob(
+                        Y_val_tensor,
+                        X_val_tensor,
+                    ).mean()
+                ).item()
+            )
 
         train_history.append(
-            train_nll
+            train_loss
         )
 
         val_history.append(
-            val_nll
+            val_loss
         )
 
-        # Print approximately 10 updates during training.
-        print_every = max(
-            1,
-            used_config["epochs"] // 10,
+        # ====================================================
+        # BEST MODEL
+        # ====================================================
+
+        improved = (
+            val_loss
+            <
+            best_val_loss
+            - min_delta
         )
 
-        if (
-            verbose
-            and (
+        if improved:
+
+            best_val_loss = (
+                val_loss
+            )
+
+            best_epoch = (
                 epoch + 1
-            ) % print_every == 0
+            )
+
+            best_state = copy.deepcopy(
+                model.state_dict()
+            )
+
+            epochs_without_improvement = 0
+
+        else:
+
+            epochs_without_improvement += 1
+
+        # ====================================================
+        # PRINT
+        # ====================================================
+
+        if verbose and (
+            epoch == 0
+            or (epoch + 1) % print_every == 0
+            or epoch + 1 == n_epochs
         ):
 
             print(
-                f"epoch "
+                f"Epoch "
                 f"{epoch + 1:4d}/"
-                f"{used_config['epochs']} - "
-                f"train NLL="
-                f"{train_nll:.4f} - "
-                f"val NLL="
-                f"{val_nll:.4f}"
+                f"{n_epochs} | "
+                f"train="
+                f"{train_loss:.6e} | "
+                f"val="
+                f"{val_loss:.6e} | "
+                f"best="
+                f"{best_val_loss:.6e}"
             )
 
+        # ====================================================
+        # EARLY STOP
+        # ====================================================
+
+        if (
+            patience is not None
+            and epochs_without_improvement
+            >= int(patience)
+        ):
+
+            if verbose:
+
+                print(
+                    "Early stopping at epoch "
+                    f"{epoch + 1}. "
+                    "Best epoch: "
+                    f"{best_epoch}."
+                )
+
+            break
+
+    # ========================================================
+    # RESTORE BEST VALIDATION MODEL
+    # ========================================================
+
+    if (
+        restore_best
+        and best_state is not None
+    ):
+
+        model.load_state_dict(
+            best_state
+        )
+
     model.eval()
+
+    used_config = (
+        config.copy()
+    )
+
+    used_config[
+        "best_epoch"
+    ] = best_epoch
+
+    used_config[
+        "best_val_loss"
+    ] = best_val_loss
+
+    used_config[
+        "epochs_ran"
+    ] = len(
+        train_history
+    )
 
     return (
         model,
