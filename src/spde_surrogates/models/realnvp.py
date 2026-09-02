@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from spde_surrogates.models.base import ConditionalGenerator
 
 class AffineCoupling(nn.Module):
     """
@@ -148,7 +149,7 @@ class AffineCoupling(nn.Module):
         return y, log_det
 
 
-class ConditionalRealNVP(nn.Module):
+class ConditionalRealNVP(ConditionalGenerator):
     """
     Conditional Normalizing Flow for POD coefficients.
     """
@@ -294,11 +295,13 @@ class ConditionalRealNVP(nn.Module):
 
 
     @torch.no_grad()
+
     def sample(
-        self,
-        cond,
-        z=None,
-    ):
+    self,
+    cond,
+    z=None,
+    **kwargs,
+):
         """
         Generate conditional POD coefficients.
 

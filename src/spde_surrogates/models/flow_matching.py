@@ -1,8 +1,9 @@
 import torch
 from torch import nn
 
+from spde_surrogates.models.base import ConditionalGenerator
 
-class ConditionalPODFlowMatching(nn.Module):
+class ConditionalPODFlowMatching(ConditionalGenerator):
     """
     Conditional Flow Matching model for normalized POD coefficients.
 
@@ -114,10 +115,11 @@ class ConditionalPODFlowMatching(nn.Module):
 
     @torch.no_grad()
     def sample(
-        self,
-        cond,
-        n_steps=100,
-        z=None,
+    self,
+    cond,
+    z=None,
+    n_steps=100,
+    **kwargs,
     ):
         """
         Generate normalized POD coefficients by integrating
