@@ -876,7 +876,7 @@ def export_static_comparison_report(
         timewise_rows,
     )
 
-    # ========================================================
+        # ========================================================
     # TRAINING HISTORY TABLE
     # ========================================================
 
@@ -887,13 +887,21 @@ def export_static_comparison_report(
         ("Flow Matching", fm_result),
     ]:
 
-        train_history = result[
+        train_history = result.get(
             "train_history"
-        ]
+        )
 
-        val_history = result[
+        val_history = result.get(
             "val_history"
-        ]
+        )
+
+        if (
+            train_history is None
+            or val_history is None
+            or len(train_history) == 0
+            or len(val_history) == 0
+        ):
+            continue
 
         for epoch, (
             train_loss,
@@ -908,35 +916,36 @@ def export_static_comparison_report(
 
             training_rows.append(
                 {
-                    "model":
-                        model_name,
-
-                    "epoch":
-                        epoch,
-
-                    "train_loss":
-                        float(train_loss),
-
-                    "val_loss":
-                        float(val_loss),
+                    "model": model_name,
+                    "epoch": epoch,
+                    "train_loss": float(
+                        train_loss
+                    ),
+                    "val_loss": float(
+                        val_loss
+                    ),
                 }
             )
 
-    training_path = (
-        tables_dir
-        / "training_history.csv"
-    )
+    training_path = None
 
-    _write_csv(
-        training_path,
-        [
-            "model",
-            "epoch",
-            "train_loss",
-            "val_loss",
-        ],
-        training_rows,
-    )
+    if training_rows:
+
+        training_path = (
+            tables_dir
+            / "training_history.csv"
+        )
+
+        _write_csv(
+            training_path,
+            [
+                "model",
+                "epoch",
+                "train_loss",
+                "val_loss",
+            ],
+            training_rows,
+        )
 
     # ========================================================
     # FIGURE 1 — TIME-WISE ENERGY
@@ -1131,7 +1140,7 @@ def export_static_comparison_report(
     plt.close(fig)
 
     # ========================================================
-    # FIGURES 4–5 — TRAINING CURVES
+    # FIGURES 4-5 - TRAINING CURVES
     # ========================================================
 
     training_figure_paths = {}
@@ -1149,31 +1158,38 @@ def export_static_comparison_report(
         ),
     ]:
 
+        train_history = result.get(
+            "train_history"
+        )
+
+        val_history = result.get(
+            "val_history"
+        )
+
+        if (
+            train_history is None
+            or val_history is None
+            or len(train_history) == 0
+            or len(val_history) == 0
+        ):
+            continue
+
         fig, ax = plt.subplots(
             figsize=(8, 4)
         )
 
         ax.plot(
-            result[
-                "train_history"
-            ],
+            train_history,
             label="train",
         )
 
         ax.plot(
-            result[
-                "val_history"
-            ],
+            val_history,
             label="validation",
         )
 
-        ax.set_xlabel(
-            "Epoch"
-        )
-
-        ax.set_ylabel(
-            "Training objective"
-        )
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Training objective")
 
         ax.set_title(
             f"{model_name} training"
@@ -1231,10 +1247,12 @@ def export_static_comparison_report(
                 timewise_path
             ),
 
-        "training_table":
-            str(
-                training_path
-            ),
+     	"training_table":
+    (
+        str(training_path)
+        if training_path is not None
+        else None
+   	    ),
 
         "timewise_figure":
             str(

@@ -97,21 +97,22 @@ def pairwise_distances(
 def energy_distance_squared(
     real_samples,
     generated_samples,
+    unbiased=True,
 ):
     """
-    Empirical trajectory/snapshot energy-distance quantity.
+    Empirical squared energy-distance quantity.
 
-    Implements
+    D^2 =
+        2 E ||X - Y||
+        - E ||X - X'||
+        - E ||Y - Y'||
 
-        D^2 =
-            2 E ||X - Y||
-            - E ||X - X'||
-            - E ||Y - Y'||
+    If unbiased=True, diagonal self-distances are excluded
+    from the X-X' and Y-Y' terms. This corresponds more
+    closely to the expectation over independent copies.
 
-    using empirical Monte Carlo averages.
-
-    real_samples and generated_samples are allowed to
-    contain DIFFERENT numbers of samples.
+    Different numbers of real and generated samples are
+    fully supported.
     """
 
     real_samples = np.asarray(
@@ -122,14 +123,29 @@ def energy_distance_squared(
         generated_samples
     )
 
-    if real_samples.shape[0] == 0:
+    n_real = real_samples.shape[0]
+    n_generated = generated_samples.shape[0]
+
+    if n_real == 0:
         raise ValueError(
             "real_samples cannot be empty."
         )
 
-    if generated_samples.shape[0] == 0:
+    if n_generated == 0:
         raise ValueError(
             "generated_samples cannot be empty."
+        )
+
+    if unbiased and n_real < 2:
+        raise ValueError(
+            "At least two real samples are required "
+            "for the unbiased estimator."
+        )
+
+    if unbiased and n_generated < 2:
+        raise ValueError(
+            "At least two generated samples are required "
+            "for the unbiased estimator."
         )
 
     d_real_generated = pairwise_distances(
@@ -147,20 +163,47 @@ def energy_distance_squared(
         generated_samples,
     )
 
+    cross_term = (
+        d_real_generated.mean()
+    )
+
+    if unbiased:
+
+        real_real_term = (
+            d_real_real.sum()
+            /
+            (
+                n_real
+                * (n_real - 1)
+            )
+        )
+
+        generated_generated_term = (
+            d_generated_generated.sum()
+            /
+            (
+                n_generated
+                * (n_generated - 1)
+            )
+        )
+
+    else:
+
+        real_real_term = (
+            d_real_real.mean()
+        )
+
+        generated_generated_term = (
+            d_generated_generated.mean()
+        )
+
     value = (
-        2.0
-        * d_real_generated.mean()
-        - d_real_real.mean()
-        - d_generated_generated.mean()
+        2.0 * cross_term
+        - real_real_term
+        - generated_generated_term
     )
 
-    # The population quantity is non-negative.
-    # Remove possible tiny negative values caused by
-    # floating-point round-off.
-    return float(
-        max(value, 0.0)
-    )
-
+    return float(value)
 
 def timewise_energy_distance_squared(
     real_trajectories,
