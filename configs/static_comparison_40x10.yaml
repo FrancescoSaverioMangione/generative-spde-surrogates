@@ -1,0 +1,74 @@
+experiment:
+  name: static_comparison_40x10
+  seed: 123
+  output_dir: outputs/static_comparison_40x10
+
+problem:
+  module: spde_surrogates.problems.randomized_advection_diffusion
+
+data:
+  path: data/static_comparison_40x10.npz
+  n_mu: 40
+  n_realizations: 10
+  nimp: 3
+  dt: 0.05
+  steps: 100
+
+split:
+  train_fraction: 0.70
+  val_fraction: 0.15
+  test_fraction: 0.15
+  seed: 1
+
+pod:
+  target_error: 0.01
+  max_modes: 100
+  selection: trajectory_error
+  energy_threshold: 0.999
+
+realnvp:
+  model:
+    n_layers: 8
+    hidden_size: 128
+    hidden_depth: 2
+
+  training:
+    batch_size: 128
+    epochs: 300
+    lr: 0.0001
+    weight_decay: 0.00001
+    patience: 20
+    min_delta: 0.0
+    restore_best: true
+
+flow_matching:
+  model:
+    hidden_dims:
+      - 256
+      - 256
+      - 256
+
+  training:
+    batch_size: 128
+    epochs: 300
+    lr: 0.0001
+    weight_decay: 0.00001
+    patience: 30
+    min_delta: 0.0
+    restore_best: true
+
+  sampling:
+    n_steps: 100
+
+evaluation:
+  n_generated: 100
+  temporal_coupling: shared_noise
+
+benchmark:
+  sample_sizes:
+    - 1
+    - 10
+    - 50
+    - 100
+  n_repeats: 5
+  n_warmup: 2
